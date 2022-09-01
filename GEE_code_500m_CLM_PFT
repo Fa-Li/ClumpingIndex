@@ -1,0 +1,147 @@
+var WORLDCLIMs = ee.ImageCollection("WORLDCLIM/V1/MONTHLY");
+print(WORLDCLIMs);
+var tavg=WORLDCLIMs.map(function(image) { return image.select(['tavg']).multiply(0.1); });
+print(tavg);
+var tavg_max=tavg.max();
+var tavg_min=tavg.min();
+print('tavg_max',tavg_max,'tavg_min',tavg_min);
+var vizParams = {min: -10, max: 40,palette: ['0000FF','FF0000']};
+// Map.addLayer(tavg_max, vizParams, 'tavg_max');
+var tmax=WORLDCLIMs.map(function(image) { return image.select(['tmax']).multiply(0.1); });
+// Map.addLayer(tmax, vizParams, 'tmax');
+// var tavg_max_example=tavg_max.reduceRegion(ee.Reducer.first(),check_pt).get("tavg");
+// print('tavg_max_example',tavg_max_example);
+var GDD=WORLDCLIMs.map(function(image) { 
+  var tmax=image.select(['tmax']).multiply(0.1);
+  var tmin=image.select(['tmin']).multiply(0.1);
+  // var gdd_month=tmax.add(tmin).divide(ee.Image.constant(2)).subtract(ee.Image.constant(5)).multiply(ee.Image.constant(30));
+  var gdd_month=tmax.add(tmin).divide(2).subtract(5).multiply(30);
+  //https://developers.google.com/earth-engine/guides/image_math
+  return gdd_month; });
+var GDD=GDD.sum();
+var vizParams = {min: 0, max: 100000,palette: ['0000FF','FF0000']};//palette: ['FF0000', 'FFFFFF', '0000FF']
+print('GDD',GDD);
+// Map.addLayer(GDD, vizParams, 'GDD');
+var prec=WORLDCLIMs.map(function(image) { return image.select(['prec']); });
+var prec_annual=prec.sum();
+var pre_driest=prec.min();
+
+// Northern Hemisphere
+var NH_regions =
+ee.Geometry.Polygon(
+[[[-180, 90],
+    [-180, 0],
+    [180, 0],
+    [180, 90]]], null, false);
+// Southern Hemisphere
+var SH_regions =
+ee.Geometry.Polygon(
+[[[-180, 0],
+    [-180, -90],
+    [180, -90],[180, 0]]], null, false);
+var prec_NH=prec.map(function(image) { return image.clip(NH_regions);});//image.set('month',image.get('month')); 
+var prec_SH=prec.map(function(image) { return image.clip(SH_regions); });
+print(prec_SH);
+var prec_NH_winter=prec_NH.filter(ee.Filter.inList('month',ee.List([11,12,1,2,3,4]))).sum();
+var prec_SH_winter=prec_SH.filter(ee.Filter.inList('month',ee.List([5,6,7,8,9,10]))).sum();
+//// note: ee.Filter.calendarRange(5,10,'month') need the imagecollection has timestamp while
+////ee.Filter.inList only select data in the list,see more on https://gis.stackexchange.com/questions/261495/filter-image-collection-with-a-date-list-in-google-earth-engine
+var prcp_winter=ee.ImageCollection.fromImages([prec_NH_winter, prec_SH_winter]).mosaic()
+// Map.addLayer(prcp_winter, vizParams, 'pre_SH');
+
+var year=2006;
+var dataset = ee.ImageCollection('MODIS/006/MCD12Q1').filter(ee.Filter.calendarRange(year,year,'year'));
+var LCS = dataset.select('LC_Type5').first();
+var dimensions=LCS.getInfo().bands[0].dimensions;
+print('landcover types',LCS,dimensions);
+
+////not vegetated
+var mask_noVeg=LCS.eq(0).or(LCS.eq(10)).or(LCS.eq(11));
+// Map.addLayer(mask_noVeg, {}, 'mask_noVeg');
+var LCS_new=mask_noVeg.multiply(0).add(LCS.multiply(mask_noVeg.not()))
+////eq,gt,gte(),lt(), lte() 
+////Needleleaf evergreen tree, temperate needleleaf evergreen tree Tc >-19C and GDD > 1200 
+var mask_NETT=tavg_min.gt(-19).and(GDD.gt(1200)).and(LCS.eq(1));
+// Map.addLayer(mask_NETT, {}, 'mask_NETT');
+var LCS_new=mask_NETT.multiply(1).add(LCS_new.multiply(mask_NETT.not()))
+////Needleleaf evergreen tree, boreal needleleaf evergreen tree Tc<=19C or GD<=1200
+var mask_NEBT=tavg_min.lte(-19).or(GDD.lte(1200)).and(LCS.eq(1));
+// Map.addLayer(mask_NEBT, {}, 'mask_NEBT');
+var LCS_new=mask_NEBT.multiply(2).add(LCS_new.multiply(mask_NEBT.not()));
+////Needleleaf deciduous tree needleleaf deciduous tree none
+var mask_NDBT=LCS.eq(3);
+// Map.addLayer(mask_NDBT, {}, 'mask_NDBT');
+var LCS_new=mask_NDBT.multiply(3).add(LCS_new.multiply(mask_NDBT.not()))
+////Broadleaf evergreen tree, tropical broadleaf evergreen tree Tc > 15.5C
+var mask_BETT=tavg_min.gt(15.5).and(LCS.eq(2));
+// Map.addLayer(mask_BETT, {}, 'mask_BETT');
+var LCS_new=mask_BETT.multiply(4).add(LCS_new.multiply(mask_BETT.not()));
+////Broadleaf evergreen tree, temperate broadleaf evergreen tree Tc<=15.5C
+var mask_BETTemp=tavg_min.lte(15.5).and(LCS.eq(2));
+// Map.addLayer(mask_BETTemp, {}, 'mask_BETTemp');
+var LCS_new=mask_BETTemp.multiply(5).add(LCS_new.multiply(mask_BETTemp.not()));
+////Broadleaf deciduous tree, tropical broadleaf deciduous tree Tc > 15.5C
+var mask_BDTT=tavg_min.gt(15.5).and(LCS.eq(4));
+// Map.addLayer(mask_BDTT, {}, 'mask_BDTT');
+var LCS_new=mask_BDTT.multiply(6).add(LCS_new.multiply(mask_BDTT.not()));
+////Broadleaf deciduous tree, temperate broadleaf deciduous tree -15C <Tc<=15.5C and GDD > 1200
+var mask_BDTTemp=tavg_min.gt(-15).and(tavg_min.lte(15.5)).and(GDD.gt(1200)).and(LCS.eq(4));
+// Map.addLayer(mask_BDTTemp, {}, 'mask_BDTTemp');
+var LCS_new=mask_BDTTemp.multiply(7).add(LCS_new.multiply(mask_BDTTemp.not()));
+////Broadleaf deciduous tree, boreal broadleaf deciduous tree Tc<=-15C or GDD<=1200
+var mask_BDBT=tavg_min.lte(-15).or(GDD.lte(1200)).and(LCS.eq(4));
+// Map.addLayer(mask_BDBT, {}, 'mask_BDBT');
+var LCS_new=mask_BDBT.multiply(8).add(LCS_new.multiply(mask_BDBT.not()));
+////Broadleaf evergreen shrub, temperate shrub Tc > -19C and GDD > 1200 and Pann > 520 mm and Pwin > 2/3 Pann;
+var mask_BEST=tavg_min.gt(-19).and(GDD.gt(1200)).and(prec_annual.gt(520)).and(prcp_winter.gt(prec_annual.multiply(2/3))).multiply(LCS.eq(5));
+// Map.addLayer(mask_BEST, {}, 'mask_BEST');
+var LCS_new=mask_BEST.multiply(9).add(LCS_new.multiply(mask_BEST.not()));
+////Broadleaf deciduous shrub, temperate shrub Tc > -19C and GDD > 1200 and (Pann<=520 mm or Pwin<=2/3 Pann);
+var mask_BDST=tavg_min.gt(-19).and(GDD.gt(1200)).and(prec_annual.lte(520).or(prcp_winter.lte(prec_annual.multiply(2/3)))).multiply(LCS.eq(5));
+// Map.addLayer(mask_BDST, {}, 'mask_BDST');
+var LCS_new=mask_BDST.multiply(10).add(LCS_new.multiply(mask_BDST.not()));
+
+////Broadleaf deciduous shrub, boreal shrub Tc<=-19C or GDD<=1200;
+var mask_BDSB=tavg_min.lte(-19).or(GDD.lte(1200)).and(LCS.eq(5));
+// Map.addLayer(mask_BDSB, {}, 'mask_BDSB');
+var LCS_new=mask_BDSB.multiply(11).add(LCS_new.multiply(mask_BDSB.not()));
+
+////C3 grass, arctic grass GDD < 1000;
+var mask_c3Arc=GDD.lt(1000).and(LCS.eq(6));
+// Map.addLayer(mask_c3Arc, {}, 'mask_c3Arc');
+var LCS_new=mask_c3Arc.multiply(12).add(LCS_new.multiply(mask_c3Arc.not()));
+
+////C4 grass, GDD > 1000 and Tc > 22C and driest month Pmon > 25 mm;
+var mask_c4=tavg_min.gt(22).and(GDD.gt(1000)).and(pre_driest.gt(25)).and(LCS.eq(6));
+// Map.addLayer(mask_c4, {}, 'mask_c4');
+var LCS_new=mask_c4.multiply(14).add(LCS_new.multiply(mask_c4.not()));
+
+////c3 grass
+var mask_c3=mask_c3Arc.not().and(mask_c4.not()).and(LCS.eq(6));
+// Map.addLayer(mask_c3, {}, 'mask_c3');
+var LCS_new=mask_c3.multiply(13).add(LCS_new.multiply(mask_c3.not()));
+
+////crop
+var mask_crop=LCS.eq(7).or(LCS.eq(8));
+// Map.addLayer(mask_crop, {}, 'mask_crop');
+var LCS_new=mask_crop.multiply(15).add(LCS_new.multiply(mask_crop.not()));
+
+var data_regions =
+ee.Geometry.Polygon(
+[[[-179.995, 90],
+    [-179.995, -90],
+    [179.995, -90],
+    [179.995, 90]]], null, false);
+var LCS_new=LCS_new.reproject('EPSG:4326');
+var data_regions =ee.Geometry.Rectangle([-180, -90, 180, 90],'EPSG:4326',false);
+Export.image.toDrive({
+  image: LCS_new,
+  description: 'ELM_PFT_' + year.toString(),
+  dimensions: dimensions,
+// scale:500,
+  region: data_regions ,
+  folder: 'PFT',
+  fileFormat: 'GeoTIFF',
+  maxPixels:1e13,
+  crs: 'EPSG:4326'
+});
